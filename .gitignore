@@ -1,0 +1,14 @@
+# Anticode Mobile
+Android AI Code Editor
+
+/app/build/
+*.apk
+*.aab
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
