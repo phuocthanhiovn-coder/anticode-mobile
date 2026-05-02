@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         requestStoragePermission()
         setContent {
             AnticodeTheme {
-                AnticodeApp()
+                AnticodeMainApp()
             }
         }
     }
@@ -84,7 +84,7 @@ enum class BottomTab { CHAT, TERMINAL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AnticodeApp() {
+fun AnticodeMainApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val api = remember { AnticodeApi() }
