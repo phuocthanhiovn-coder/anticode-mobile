@@ -3,13 +3,17 @@ package vn.anticode.mobile.ui.chat
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -20,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -29,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import vn.anticode.mobile.ai.ChatMessage
 import vn.anticode.mobile.ui.theme.*
 
@@ -42,6 +48,9 @@ fun ChatPanel(
     onStop: () -> Unit,
     onApplyCode: ((String) -> Unit)? = null,
     hasOpenFile: Boolean = false,
+    onPickImage: (() -> Unit)? = null,
+    pendingImageUri: Uri? = null,
+    onClearImage: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -104,11 +113,41 @@ fun ChatPanel(
 
         HorizontalDivider(color = Border, thickness = 0.5.dp)
 
+        // Pending image preview
+        if (pendingImageUri != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().background(Surface).padding(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AsyncImage(
+                    model = pendingImageUri,
+                    contentDescription = "Selected image",
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Image attached", color = TextSecondary, fontSize = 11.sp)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { onClearImage?.invoke() }, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Filled.Close, "Remove", tint = Error, modifier = Modifier.size(16.dp))
+                }
+            }
+            HorizontalDivider(color = Border, thickness = 0.5.dp)
+        }
+
         // Input
         Row(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(6.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            // Image picker button
+            IconButton(
+                onClick = { onPickImage?.invoke() },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(Icons.Filled.Image, "Attach image", tint = TextSecondary, modifier = Modifier.size(20.dp))
+            }
+
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
@@ -134,13 +173,16 @@ fun ChatPanel(
                 IconButton(
                     onClick = {
                         val text = inputText.trim()
-                        if (text.isNotBlank()) { onSend(text); inputText = "" }
+                        if (text.isNotBlank() || pendingImageUri != null) {
+                            onSend(text.ifBlank { "Describe this image" })
+                            inputText = ""
+                        }
                     },
-                    enabled = inputText.isNotBlank()
+                    enabled = inputText.isNotBlank() || pendingImageUri != null
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send, "Send",
-                        tint = if (inputText.isNotBlank()) Primary else TextMuted,
+                        tint = if (inputText.isNotBlank() || pendingImageUri != null) Primary else TextMuted,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -164,19 +206,34 @@ fun MessageBubble(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
         if (isUser) {
-            // User message — simple bubble
-            SelectionContainer {
-                Text(
-                    text = message.content,
-                    color = TextPrimary,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp,
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .clip(RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp))
-                        .background(Primary.copy(alpha = 0.2f))
-                        .padding(10.dp)
-                )
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .clip(RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp))
+                    .background(Primary.copy(alpha = 0.2f))
+                    .padding(10.dp)
+            ) {
+                // Show image if message has imageUrl
+                if (message.imageUrl != null) {
+                    AsyncImage(
+                        model = message.imageUrl,
+                        contentDescription = "Attached image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.FillWidth
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+                SelectionContainer {
+                    Text(
+                        text = message.content,
+                        color = TextPrimary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
+                }
             }
         } else {
             // Clean action tags for display
@@ -397,17 +454,14 @@ sealed class MarkdownPart {
 
 fun parseMarkdown(content: String): List<MarkdownPart> {
     val parts = mutableListOf<MarkdownPart>()
-    // Match ```lang\ncode``` — language is optional, newline after lang is optional
     val codeBlockRegex = Regex("```(\\w*)[\\t ]*\\n?([\\s\\S]*?)```")
 
     var lastIndex = 0
     codeBlockRegex.findAll(content).forEach { match ->
-        // Text before code block
         if (match.range.first > lastIndex) {
             val text = content.substring(lastIndex, match.range.first).trim()
             if (text.isNotEmpty()) parts.add(MarkdownPart.Text(text))
         }
-        // Code block — trim leading/trailing blank lines from code
         val code = match.groupValues[2].trimStart('\n').trimEnd('\n', ' ')
         if (code.isNotEmpty()) {
             parts.add(MarkdownPart.CodeBlock(
@@ -417,13 +471,11 @@ fun parseMarkdown(content: String): List<MarkdownPart> {
         }
         lastIndex = match.range.last + 1
     }
-    // Remaining text after last code block
     if (lastIndex < content.length) {
         val text = content.substring(lastIndex).trim()
         if (text.isNotEmpty()) parts.add(MarkdownPart.Text(text))
     }
 
-    // If no code blocks found, return as single text
     if (parts.isEmpty()) parts.add(MarkdownPart.Text(content))
 
     return parts

@@ -9,7 +9,9 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -32,21 +34,27 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import vn.anticode.mobile.ai.AnticodeApi
 import vn.anticode.mobile.ai.ChatMessage
 import vn.anticode.mobile.data.FileManager
 import vn.anticode.mobile.data.SettingsStore
-import vn.anticode.mobile.data.TerminalManager
 import vn.anticode.mobile.ui.chat.ChatPanel
 import vn.anticode.mobile.ui.files.FileExplorer
 import vn.anticode.mobile.ui.settings.SettingsScreen
-import vn.anticode.mobile.ui.terminal.TerminalEntry
-import vn.anticode.mobile.ui.terminal.TerminalPanel
 import vn.anticode.mobile.ui.theme.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
 
@@ -66,7 +74,6 @@ class MainActivity : ComponentActivity() {
 
     private fun requestStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ — request MANAGE_EXTERNAL_STORAGE via Settings
             if (!Environment.isExternalStorageManager()) {
                 try {
                     val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -74,7 +81,6 @@ class MainActivity : ComponentActivity() {
                     }
                     startActivity(intent)
                 } catch (_: Exception) {
-                    // Fallback: open general storage settings
                     val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                     startActivity(intent)
                 }
@@ -116,22 +122,17 @@ fun AnticodeMainApp() {
     var screen by remember { mutableStateOf(AppScreen.LOGIN) }
     var isLoggedIn by remember { mutableStateOf(false) }
 
-    // Configure API + Terminal + auto-login when key exists
+    // Configure API + auto-login
     LaunchedEffect(apiKey, baseUrl) {
         if (apiKey.isBlank()) {
             screen = AppScreen.LOGIN
             isLoggedIn = false
         } else {
             api.configure(baseUrl, apiKey)
-            TerminalManager.configure(baseUrl, apiKey)
             if (!isLoggedIn) {
                 val valid = api.testConnection()
-                if (valid) {
-                    isLoggedIn = true
-                    screen = AppScreen.MAIN
-                } else {
-                    screen = AppScreen.LOGIN
-                }
+                if (valid) { isLoggedIn = true; screen = AppScreen.MAIN }
+                else { screen = AppScreen.LOGIN }
             }
             try {
                 val loaded = api.getModels()
@@ -143,7 +144,6 @@ fun AnticodeMainApp() {
     val editorFontSize by SettingsStore.getEditorFontSize(context).collectAsState(initial = 13f)
     val chatFontSize by SettingsStore.getChatFontSize(context).collectAsState(initial = 13f)
     val showLineNumbers by SettingsStore.getShowLineNumbers(context).collectAsState(initial = true)
-    val wordWrap by SettingsStore.getWordWrap(context).collectAsState(initial = false)
     val editorTheme by SettingsStore.getEditorTheme(context).collectAsState(initial = "dark")
 
     // UI state
@@ -152,11 +152,6 @@ fun AnticodeMainApp() {
     var openFile by remember { mutableStateOf<File?>(null) }
     var fileContent by remember { mutableStateOf("") }
     var fileDirty by remember { mutableStateOf(false) }
-    var bottomTab by remember { mutableStateOf("chat") }
-
-    // Terminal state (hoisted so it persists across tab switches)
-    var terminalEntries by remember { mutableStateOf(listOf<TerminalEntry>()) }
-    var terminalHistory by remember { mutableStateOf(listOf<String>()) }
 
     // Chat state
     var chatMessages by remember { mutableStateOf(listOf<ChatMessage>()) }
@@ -164,12 +159,34 @@ fun AnticodeMainApp() {
     var streamContent by remember { mutableStateOf("") }
     var streamJob by remember { mutableStateOf<Job?>(null) }
 
+    // Image state
+    var pendingImageUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingImageUrl by remember { mutableStateOf<String?>(null) }
+
     // Snackbar
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Image picker
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            pendingImageUri = uri
+            // Upload image in background
+            scope.launch {
+                val url = uploadImage(context, uri, baseUrl, apiKey)
+                if (url != null) {
+                    pendingImageUrl = url
+                } else {
+                    snackbarHostState.showSnackbar("Failed to upload image", duration = SnackbarDuration.Short)
+                    pendingImageUri = null
+                }
+            }
+        }
+    }
+
     // --- Functions ---
     fun openFileAction(file: File) {
-        // Auto-save previous file if dirty
         if (fileDirty && openFile != null) {
             FileManager.writeFile(openFile!!, fileContent)
         }
@@ -194,9 +211,7 @@ fun AnticodeMainApp() {
 
     fun applyCodeToFile(code: String) {
         if (openFile == null) {
-            scope.launch {
-                snackbarHostState.showSnackbar("❌ No file open! Open a file first.", duration = SnackbarDuration.Short)
-            }
+            scope.launch { snackbarHostState.showSnackbar("❌ No file open!", duration = SnackbarDuration.Short) }
             return
         }
         openFile?.let {
@@ -205,7 +220,7 @@ fun AnticodeMainApp() {
             fileDirty = false
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed to apply (check permissions)",
+                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed",
                     duration = SnackbarDuration.Short
                 )
             }
@@ -217,45 +232,28 @@ fun AnticodeMainApp() {
         if (file != null && file.isFile) {
             FileManager.writeFile(file, content)
             openFileAction(file)
-            scope.launch {
-                snackbarHostState.showSnackbar("✅ Created ${file.name}", duration = SnackbarDuration.Short)
-            }
+            scope.launch { snackbarHostState.showSnackbar("✅ Created ${file.name}", duration = SnackbarDuration.Short) }
         } else {
-            scope.launch {
-                snackbarHostState.showSnackbar("❌ Failed to create $fileName (check permissions)", duration = SnackbarDuration.Short)
-            }
+            scope.launch { snackbarHostState.showSnackbar("❌ Failed to create $fileName", duration = SnackbarDuration.Short) }
         }
     }
 
-    // Process AI response for file actions and terminal commands
     fun processAIActions(response: String) {
-        // Create files
         val createRegex = Regex("<<<CREATE_FILE:(.+?)>>>\\s*```\\w*\\n([\\s\\S]*?)```")
         createRegex.findAll(response).forEach { match ->
-            val fileName = match.groupValues[1].trim()
-            val content = match.groupValues[2].trimEnd()
-            createFileFromChat(fileName, content)
-        }
-
-        // Run terminal commands
-        val cmdRegex = Regex("<<<RUN_CMD:(.+?)>>>")
-        cmdRegex.findAll(response).forEach { match ->
-            val command = match.groupValues[1].trim()
-            scope.launch {
-                val result = TerminalManager.execute(command)
-                val output = if (result.isError) "❌ $command\n${result.output}" else "✅ $command\n${result.output}"
-                chatMessages = chatMessages + ChatMessage("assistant", "```\n$ $command\n${result.output}\n```")
-                snackbarHostState.showSnackbar(
-                    if (result.isError) "Command failed" else "Command executed",
-                    duration = SnackbarDuration.Short
-                )
-            }
+            createFileFromChat(match.groupValues[1].trim(), match.groupValues[2].trimEnd())
         }
     }
 
     fun sendMessage(text: String) {
-        val userMsg = ChatMessage("user", text)
+        // Build user message with image if attached
+        val imageUrl = pendingImageUrl
+        val userMsg = ChatMessage("user", text, imageUrl = imageUrl)
         chatMessages = chatMessages + userMsg
+
+        // Clear pending image
+        pendingImageUri = null
+        pendingImageUrl = null
 
         val job = scope.launch {
             isStreaming = true
@@ -271,15 +269,11 @@ fun AnticodeMainApp() {
                 append("<<<CREATE_FILE:filename.ext>>>\n")
                 append("```language\nfile content here\n```\n")
                 append("The system will automatically create the file.\n")
-                append("4. RUN TERMINAL COMMANDS: Use this EXACT format:\n")
-                append("<<<RUN_CMD:command here>>>\n")
-                append("The system will execute the command and show output.\n")
                 append("3. ANSWER QUESTIONS: You can explain code, debug, suggest improvements.\n\n")
                 append("=== RULES ===\n")
                 append("- NEVER say 'I have created/edited the file' without providing code blocks.\n")
                 append("- NEVER lie about doing something you haven't done.\n")
                 append("- ALWAYS provide actual code in code blocks for any file changes.\n")
-                append("- For terminal commands, ALWAYS use <<<RUN_CMD:command>>> format.\n")
                 if (openFile != null) {
                     append("\n=== CURRENTLY OPEN FILE: ${openFile!!.name} ===\n")
                     append("Path: ${openFile!!.absolutePath}\n")
@@ -291,7 +285,6 @@ fun AnticodeMainApp() {
                     append("\n=== NO FILE IS OPEN ===\n")
                     append("The user has no file open. If they want to create a file, use <<<CREATE_FILE:name>>>")
                 }
-                // List files in current directory
                 val dirFiles = FileManager.listFiles(currentDir)
                 if (dirFiles.isNotEmpty()) {
                     append("\n\n=== CURRENT DIR: ${currentDir.absolutePath} ===\n")
@@ -299,11 +292,10 @@ fun AnticodeMainApp() {
                         (if (it.isDirectory) "📁 " else "📄 ") + it.name
                     })
                 }
-                // Terminal history for AI awareness
-                if (terminalHistory.isNotEmpty()) {
-                    append("\n\n=== RECENT TERMINAL OUTPUT (VPS) ===\n")
-                    append(terminalHistory.joinToString("\n---\n"))
-                    append("\n\nYou can see what commands were run and their output. Analyze errors and suggest fixes.")
+                if (imageUrl != null) {
+                    append("\n\n=== USER ATTACHED AN IMAGE ===\n")
+                    append("The user has attached a screenshot/image. Analyze it and help fix any issues shown.\n")
+                    append("Image URL: $imageUrl")
                 }
             }
 
@@ -320,7 +312,6 @@ fun AnticodeMainApp() {
 
                 if (streamContent.isNotBlank()) {
                     chatMessages = chatMessages + ChatMessage("assistant", streamContent)
-                    // Process AI actions (auto-create files)
                     processAIActions(streamContent)
                 }
             } catch (e: Exception) {
@@ -364,7 +355,7 @@ fun AnticodeMainApp() {
                 editorFontSize = editorFontSize,
                 chatFontSize = chatFontSize,
                 showLineNumbers = showLineNumbers,
-                wordWrap = wordWrap,
+                wordWrap = false,
                 editorTheme = editorTheme,
                 onApiKeyChange = { scope.launch { SettingsStore.setApiKey(context, it) } },
                 onBaseUrlChange = { scope.launch { SettingsStore.setBaseUrl(context, it) } },
@@ -372,7 +363,7 @@ fun AnticodeMainApp() {
                 onEditorFontSizeChange = { scope.launch { SettingsStore.setEditorFontSize(context, it) } },
                 onChatFontSizeChange = { scope.launch { SettingsStore.setChatFontSize(context, it) } },
                 onShowLineNumbersChange = { scope.launch { SettingsStore.setShowLineNumbers(context, it) } },
-                onWordWrapChange = { scope.launch { SettingsStore.setWordWrap(context, it) } },
+                onWordWrapChange = { },
                 onEditorThemeChange = { scope.launch { SettingsStore.setEditorTheme(context, it) } },
                 onBack = { screen = AppScreen.MAIN }
             )
@@ -409,7 +400,6 @@ fun AnticodeMainApp() {
                                     Icon(Icons.Filled.Save, "Save", tint = Secondary)
                                 }
                             }
-                            // New Chat button
                             IconButton(onClick = {
                                 chatMessages = emptyList()
                                 streamContent = ""
@@ -443,11 +433,8 @@ fun AnticodeMainApp() {
                                         scope.launch { snackbarHostState.showSnackbar("Created ${file.name}", duration = SnackbarDuration.Short) }
                                     },
                                     onDeleteFile = { file ->
-                                        // If deleted file is currently open, close it
                                         if (openFile?.absolutePath == file.absolutePath) {
-                                            openFile = null
-                                            fileContent = ""
-                                            fileDirty = false
+                                            openFile = null; fileContent = ""; fileDirty = false
                                         }
                                         scope.launch { snackbarHostState.showSnackbar("Deleted ${file.name}", duration = SnackbarDuration.Short) }
                                     },
@@ -460,7 +447,7 @@ fun AnticodeMainApp() {
                             }
                         }
 
-                        // Editor with theme
+                        // Editor
                         val editorBg = when (editorTheme) {
                             "monokai" -> Color(0xFF272822)
                             "ocean" -> Color(0xFF1B2B34)
@@ -477,57 +464,35 @@ fun AnticodeMainApp() {
                             else -> TextMuted
                         }
 
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight().background(editorBg)
-                        ) {
+                        Box(modifier = Modifier.weight(1f).fillMaxHeight().background(editorBg)) {
                             if (openFile != null) {
                                 Row(modifier = Modifier.fillMaxSize()) {
-                                    // Line numbers column
                                     if (showLineNumbers) {
                                         val lineCount = fileContent.count { it == '\n' } + 1
                                         Column(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
+                                            modifier = Modifier.fillMaxHeight()
                                                 .background(editorBg.copy(alpha = 0.8f))
                                                 .padding(horizontal = 4.dp, vertical = 8.dp),
                                             horizontalAlignment = Alignment.End
                                         ) {
                                             for (i in 1..lineCount.coerceAtMost(500)) {
-                                                Text(
-                                                    "$i",
-                                                    color = lineNumColor,
-                                                    fontSize = editorFontSize.sp,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    lineHeight = (editorFontSize * 1.5f).sp
-                                                )
+                                                Text("$i", color = lineNumColor, fontSize = editorFontSize.sp,
+                                                    fontFamily = FontFamily.Monospace, lineHeight = (editorFontSize * 1.5f).sp)
                                             }
                                         }
                                         VerticalDivider(color = Border.copy(alpha = 0.3f), thickness = 0.5.dp)
                                     }
-
-                                    // Code editor
                                     BasicTextField(
                                         value = fileContent,
-                                        onValueChange = {
-                                            fileContent = it
-                                            fileDirty = true
-                                        },
+                                        onValueChange = { fileContent = it; fileDirty = true },
                                         modifier = Modifier.weight(1f).fillMaxHeight().padding(8.dp),
-                                        textStyle = TextStyle(
-                                            color = editorFg,
-                                            fontSize = editorFontSize.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            lineHeight = (editorFontSize * 1.5f).sp
-                                        ),
+                                        textStyle = TextStyle(color = editorFg, fontSize = editorFontSize.sp,
+                                            fontFamily = FontFamily.Monospace, lineHeight = (editorFontSize * 1.5f).sp),
                                         cursorBrush = SolidColor(Primary)
                                     )
                                 }
                             } else {
-                                Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    verticalArrangement = Arrangement.Center,
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
+                                Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
                                     Icon(Icons.Filled.Code, null, tint = TextMuted, modifier = Modifier.size(48.dp))
                                     Spacer(Modifier.height(12.dp))
                                     Text("Open a file to start", color = TextMuted, fontSize = 14.sp)
@@ -540,82 +505,76 @@ fun AnticodeMainApp() {
 
                     HorizontalDivider(color = Border, thickness = 0.5.dp)
 
-                    // Bottom: Chat/Terminal panel with tab switcher
+                    // Bottom: Chat panel (no tabs, just chat)
                     Column(modifier = Modifier.weight(0.8f)) {
-                        // Tab bar
-                        Row(
-                            modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            FilterChip(
-                                selected = bottomTab == "chat",
-                                onClick = { bottomTab = "chat" },
-                                label = { Text("💬 Chat", fontSize = 11.sp) },
-                                modifier = Modifier.height(28.dp),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Primary.copy(alpha = 0.2f),
-                                    selectedLabelColor = Primary
-                                )
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            FilterChip(
-                                selected = bottomTab == "terminal",
-                                onClick = { bottomTab = "terminal" },
-                                label = { Text("⌨ Terminal", fontSize = 11.sp) },
-                                modifier = Modifier.height(28.dp),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Secondary.copy(alpha = 0.2f),
-                                    selectedLabelColor = Secondary
-                                )
-                            )
-                        }
-
-                        HorizontalDivider(color = Border, thickness = 0.5.dp)
-
-                        when (bottomTab) {
-                            "chat" -> {
-                                if (!api.isConfigured()) {
-                                    Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
-                                            Spacer(Modifier.height(8.dp))
-                                            TextButton(onClick = { screen = AppScreen.SETTINGS }) {
-                                                Text("Open Settings", color = Primary)
-                                            }
-                                        }
+                        if (!api.isConfigured()) {
+                            Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
+                                    Spacer(Modifier.height(8.dp))
+                                    TextButton(onClick = { screen = AppScreen.SETTINGS }) {
+                                        Text("Open Settings", color = Primary)
                                     }
-                                } else {
-                                    ChatPanel(
-                                        messages = chatMessages,
-                                        isStreaming = isStreaming,
-                                        currentStreamContent = streamContent,
-                                        modelName = selectedModel,
-                                        onSend = { sendMessage(it) },
-                                        onStop = { stopStreaming() },
-                                        onApplyCode = { code -> applyCodeToFile(code) },
-                                        hasOpenFile = openFile != null,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
                                 }
                             }
-                            "terminal" -> {
-                                TerminalPanel(
-                                    entries = terminalEntries,
-                                    onEntriesChange = { terminalEntries = it },
-                                    modifier = Modifier.fillMaxSize(),
-                                    onTerminalOutput = { cmd, output ->
-                                        terminalHistory = (terminalHistory + "$ $cmd\n$output").takeLast(5)
-                                    }
-                                )
-                            }
+                        } else {
+                            ChatPanel(
+                                messages = chatMessages,
+                                isStreaming = isStreaming,
+                                currentStreamContent = streamContent,
+                                modelName = selectedModel,
+                                onSend = { sendMessage(it) },
+                                onStop = { stopStreaming() },
+                                onApplyCode = { code -> applyCodeToFile(code) },
+                                hasOpenFile = openFile != null,
+                                onPickImage = {
+                                    imagePickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                pendingImageUri = pendingImageUri,
+                                onClearImage = { pendingImageUri = null; pendingImageUrl = null },
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
+
+// --- Image Upload Helper ---
+suspend fun uploadImage(context: android.content.Context, uri: Uri, baseUrl: String, apiKey: String): String? = withContext(Dispatchers.IO) {
+    try {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext null
+        val bytes = inputStream.readBytes()
+        inputStream.close()
+
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("image", "screenshot.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .build()
+
+        val request = Request.Builder()
+            .url("${baseUrl.trimEnd('/')}/api/upload/image")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .post(body)
+            .build()
+
+        val response = client.newCall(request).execute()
+        if (response.isSuccessful) {
+            val json = JSONObject(response.body?.string() ?: "{}")
+            json.optString("url", null)
+        } else null
+    } catch (_: Exception) { null }
 }
 
 // --- Login Screen ---
@@ -627,120 +586,67 @@ fun LoginScreen(
     onBaseUrlChange: (String) -> Unit,
     onLogin: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    var isConnecting by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
     var showKey by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(Background).padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = Modifier.fillMaxSize().background(Background),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(Icons.Filled.Code, null, tint = Primary, modifier = Modifier.size(64.dp))
-        Spacer(Modifier.height(16.dp))
-        Text("Anticode", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Primary)
-        Text("AI Code Editor", fontSize = 14.sp, color = TextSecondary)
-        Spacer(Modifier.height(32.dp))
-
-        OutlinedTextField(
-            value = baseUrl,
-            onValueChange = onBaseUrlChange,
-            label = { Text("API Base URL") },
-            leadingIcon = { Icon(Icons.Filled.Language, null, Modifier.size(18.dp)) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = loginFieldColors()
-        )
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { onApiKeyChange(it); errorMessage = null },
-            label = { Text("API Key") },
-            leadingIcon = { Icon(Icons.Filled.Key, null, Modifier.size(18.dp)) },
-            trailingIcon = {
-                IconButton(onClick = { showKey = !showKey }) {
-                    Icon(
-                        if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                        "Toggle visibility", Modifier.size(18.dp)
-                    )
-                }
-            },
-            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = loginFieldColors(),
-            isError = errorMessage != null
-        )
-
-        // Error message
-        AnimatedVisibility(visible = errorMessage != null) {
-            Text(
-                errorMessage ?: "",
-                color = Error,
-                fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        Button(
-            onClick = {
-                if (apiKey.isNotBlank()) {
-                    isConnecting = true
-                    errorMessage = null
-                    val testApi = AnticodeApi(baseUrl.trimEnd('/'), apiKey.trim())
-                    scope.launch {
-                        val ok = testApi.testConnection()
-                        isConnecting = false
-                        if (ok) {
-                            onLogin()
-                        } else {
-                            errorMessage = "Không thể kết nối. Kiểm tra lại API Key và Base URL."
-                        }
-                    }
-                }
-            },
-            enabled = apiKey.isNotBlank() && !isConnecting,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Primary)
+        Card(
+            modifier = Modifier.widthIn(max = 360.dp).padding(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Surface),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
         ) {
-            if (isConnecting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = TextPrimary
+            Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Anticode", fontWeight = FontWeight.Bold, fontSize = 28.sp, color = Primary)
+                Spacer(Modifier.height(4.dp))
+                Text("AI Code Editor", color = TextSecondary, fontSize = 13.sp)
+                Spacer(Modifier.height(24.dp))
+
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = onBaseUrlChange,
+                    label = { Text("Server URL") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("Đang kết nối...", fontWeight = FontWeight.SemiBold)
-            } else {
-                Icon(Icons.Filled.Login, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Connect", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    label = { Text("API Key") },
+                    visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showKey = !showKey }) {
+                            Icon(if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Toggle")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                )
+                Spacer(Modifier.height(20.dp))
+
+                Button(
+                    onClick = onLogin,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    enabled = apiKey.isNotBlank()
+                ) {
+                    Text("Connect", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                }
             }
         }
     }
 }
 
-@Composable
-fun loginFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = Primary,
-    unfocusedBorderColor = Border,
-    focusedLabelColor = Primary,
-    unfocusedLabelColor = TextSecondary,
-    focusedTextColor = TextPrimary,
-    unfocusedTextColor = TextPrimary,
-    focusedLeadingIconColor = Primary,
-    unfocusedLeadingIconColor = TextSecondary,
-    cursorColor = Primary
-)
-
-
-
-// --- Helpers ---
 fun getDefaultDir(): File {
-    val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-    return if (downloads.exists()) downloads else Environment.getExternalStorageDirectory()
+    val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+    if (!dir.exists()) dir.mkdirs()
+    return dir
 }

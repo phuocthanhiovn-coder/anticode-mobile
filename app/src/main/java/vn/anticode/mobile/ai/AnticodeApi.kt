@@ -15,7 +15,8 @@ import java.util.concurrent.TimeUnit
 
 data class ChatMessage(
     val role: String,   // "user", "assistant", "system"
-    val content: String
+    val content: String,
+    val imageUrl: String? = null  // URL of attached image
 )
 
 data class ModelInfo(
