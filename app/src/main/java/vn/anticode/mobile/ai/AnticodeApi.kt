@@ -161,21 +161,52 @@ class AnticodeApi(
             call.cancel() // Cancel HTTP call when flow is cancelled
         }
     }
-
     /**
-     * Get available models from /v1/models.
-     * Response format: { "object": "list", "data": [{"id": "claude-sonnet-4-6", "object": "model", ...}] }
+     * Get available models from /api/user/models (filtered by user's plan).
+     * Response format: { "models": [{"id": "...", "name": "...", "dailyLimit": N, "usedToday": N, "available": bool}], "plan": "..." }
+     * Falls back to /v1/models if /api/user/models fails.
      */
     suspend fun getModels(): List<ModelInfo> = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext emptyList()
 
-        val request = Request.Builder()
-            .url("$baseUrl/v1/models")
-            .addHeader("Authorization", "Bearer $apiKey")
-            .get()
-            .build()
-
+        // Try authenticated endpoint first (plan-filtered)
         try {
+            val request = Request.Builder()
+                .url("$baseUrl/api/user/models")
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: ""
+                response.close()
+                val json = JsonParser.parseString(body).asJsonObject
+                val models = json.getAsJsonArray("models")
+                if (models != null && models.size() > 0) {
+                    return@withContext models.mapNotNull { elem ->
+                        try {
+                            val obj = elem.asJsonObject
+                            ModelInfo(
+                                id = obj.get("id").asString,
+                                name = obj.get("name")?.asString ?: obj.get("id").asString
+                            )
+                        } catch (_: Exception) { null }
+                    }
+                }
+            } else {
+                response.close()
+            }
+        } catch (_: Exception) { }
+
+        // Fallback to public /v1/models
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/v1/models")
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 response.close()
@@ -193,7 +224,7 @@ class AnticodeApi(
                     val obj = elem.asJsonObject
                     ModelInfo(
                         id = obj.get("id").asString,
-                        name = obj.get("id").asString
+                        name = obj.get("name")?.asString ?: obj.get("id").asString
                     )
                 } catch (_: Exception) { null }
             }.sortedBy { it.name }

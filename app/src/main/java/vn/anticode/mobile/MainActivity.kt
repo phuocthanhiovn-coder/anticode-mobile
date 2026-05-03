@@ -1,10 +1,13 @@
 package vn.anticode.mobile
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -61,8 +66,19 @@ class MainActivity : ComponentActivity() {
 
     private fun requestStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ uses MANAGE_EXTERNAL_STORAGE — needs special intent
-            // For now, use app-specific directory
+            // Android 11+ — request MANAGE_EXTERNAL_STORAGE via Settings
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    // Fallback: open general storage settings
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivity(intent)
+                }
+            }
         } else {
             val perms = arrayOf(
                 Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -80,7 +96,6 @@ class MainActivity : ComponentActivity() {
 
 // Navigation screens
 enum class AppScreen { LOGIN, MAIN, SETTINGS }
-enum class BottomTab { CHAT, TERMINAL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,7 +136,6 @@ fun AnticodeMainApp() {
     }
 
     // UI state
-    var bottomTab by remember { mutableStateOf(BottomTab.CHAT) }
     var showFiles by remember { mutableStateOf(false) }
     var currentDir by remember { mutableStateOf(getDefaultDir()) }
     var openFile by remember { mutableStateOf<File?>(null) }
@@ -134,9 +148,7 @@ fun AnticodeMainApp() {
     var streamContent by remember { mutableStateOf("") }
     var streamJob by remember { mutableStateOf<Job?>(null) }
 
-    // Terminal state
-    var terminalLines by remember { mutableStateOf(listOf("$ anticode terminal v1.0", "Type a command...")) }
-    var terminalInput by remember { mutableStateOf("") }
+
 
     // --- Functions ---
     fun openFileAction(file: File) {
@@ -261,6 +273,16 @@ fun AnticodeMainApp() {
                                     Icon(Icons.Filled.Save, "Save", tint = Secondary)
                                 }
                             }
+                            // New Chat button
+                            IconButton(onClick = {
+                                chatMessages = emptyList()
+                                streamContent = ""
+                                streamJob?.cancel()
+                                streamJob = null
+                                isStreaming = false
+                            }) {
+                                Icon(Icons.Filled.AddComment, "New Chat", tint = Primary)
+                            }
                             IconButton(onClick = { screen = AppScreen.SETTINGS }) {
                                 Icon(Icons.Filled.Settings, "Settings", tint = TextSecondary)
                             }
@@ -321,56 +343,30 @@ fun AnticodeMainApp() {
 
                     HorizontalDivider(color = Border, thickness = 0.5.dp)
 
-                    // Bottom: Tabs + Content
+                    // Bottom: Chat panel
                     Column(modifier = Modifier.weight(0.8f)) {
-                        Row(modifier = Modifier.fillMaxWidth().background(Surface)) {
-                            BottomTabButton(Icons.AutoMirrored.Filled.Chat, "Chat", bottomTab == BottomTab.CHAT) {
-                                bottomTab = BottomTab.CHAT
-                            }
-                            BottomTabButton(Icons.Filled.Terminal, "Terminal", bottomTab == BottomTab.TERMINAL) {
-                                bottomTab = BottomTab.TERMINAL
-                            }
-                        }
-
-                        when (bottomTab) {
-                            BottomTab.CHAT -> {
-                                if (!api.isConfigured()) {
-                                    Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
-                                            Spacer(Modifier.height(8.dp))
-                                            TextButton(onClick = { screen = AppScreen.SETTINGS }) {
-                                                Text("Open Settings", color = Primary)
-                                            }
-                                        }
+                        if (!api.isConfigured()) {
+                            Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
+                                    Spacer(Modifier.height(8.dp))
+                                    TextButton(onClick = { screen = AppScreen.SETTINGS }) {
+                                        Text("Open Settings", color = Primary)
                                     }
-                                } else {
-                                    ChatPanel(
-                                        messages = chatMessages,
-                                        isStreaming = isStreaming,
-                                        currentStreamContent = streamContent,
-                                        modelName = selectedModel,
-                                        onSend = { sendMessage(it) },
-                                        onStop = { stopStreaming() },
-                                        modifier = Modifier.fillMaxSize()
-                                    )
                                 }
                             }
-                            BottomTab.TERMINAL -> {
-                                TerminalView(
-                                    lines = terminalLines,
-                                    input = terminalInput,
-                                    onInputChange = { terminalInput = it },
-                                    onSubmit = {
-                                        terminalLines = terminalLines + "$ $terminalInput"
-                                        terminalLines = terminalLines + "Command execution available in Phase 2"
-                                        terminalInput = ""
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
+                        } else {
+                            ChatPanel(
+                                messages = chatMessages,
+                                isStreaming = isStreaming,
+                                currentStreamContent = streamContent,
+                                modelName = selectedModel,
+                                onSend = { sendMessage(it) },
+                                onStop = { stopStreaming() },
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
                 }
@@ -388,6 +384,11 @@ fun LoginScreen(
     onBaseUrlChange: (String) -> Unit,
     onLogin: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var isConnecting by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showKey by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier.fillMaxSize().background(Background).padding(24.dp),
         verticalArrangement = Arrangement.Center,
@@ -412,24 +413,70 @@ fun LoginScreen(
 
         OutlinedTextField(
             value = apiKey,
-            onValueChange = onApiKeyChange,
+            onValueChange = { onApiKeyChange(it); errorMessage = null },
             label = { Text("API Key") },
             leadingIcon = { Icon(Icons.Filled.Key, null, Modifier.size(18.dp)) },
+            trailingIcon = {
+                IconButton(onClick = { showKey = !showKey }) {
+                    Icon(
+                        if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        "Toggle visibility", Modifier.size(18.dp)
+                    )
+                }
+            },
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            colors = loginFieldColors()
+            colors = loginFieldColors(),
+            isError = errorMessage != null
         )
+
+        // Error message
+        AnimatedVisibility(visible = errorMessage != null) {
+            Text(
+                errorMessage ?: "",
+                color = Error,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+            )
+        }
+
         Spacer(Modifier.height(24.dp))
 
         Button(
-            onClick = onLogin,
-            enabled = apiKey.isNotBlank(),
+            onClick = {
+                if (apiKey.isNotBlank()) {
+                    isConnecting = true
+                    errorMessage = null
+                    val testApi = AnticodeApi(baseUrl.trimEnd('/'), apiKey.trim())
+                    scope.launch {
+                        val ok = testApi.testConnection()
+                        isConnecting = false
+                        if (ok) {
+                            onLogin()
+                        } else {
+                            errorMessage = "Không thể kết nối. Kiểm tra lại API Key và Base URL."
+                        }
+                    }
+                }
+            },
+            enabled = apiKey.isNotBlank() && !isConnecting,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Primary)
         ) {
-            Icon(Icons.Filled.Login, null, Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Connect", fontWeight = FontWeight.SemiBold)
+            if (isConnecting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = TextPrimary
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Đang kết nối...", fontWeight = FontWeight.SemiBold)
+            } else {
+                Icon(Icons.Filled.Login, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Connect", fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -447,67 +494,7 @@ fun loginFieldColors() = OutlinedTextFieldDefaults.colors(
     cursorColor = Primary
 )
 
-// --- Terminal View ---
-@Composable
-fun TerminalView(
-    lines: List<String>,
-    input: String,
-    onInputChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier.background(Background).padding(8.dp)) {
-        // Output
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(lines.size) { i ->
-                Text(
-                    lines[i],
-                    color = if (lines[i].startsWith("$")) Secondary else TextSecondary,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 16.sp
-                )
-            }
-        }
-        // Input
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("$ ", color = Secondary, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-            BasicTextField(
-                value = input,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                textStyle = TextStyle(color = TextPrimary, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
-                cursorBrush = SolidColor(Secondary),
-                singleLine = true
-            )
-            IconButton(onClick = onSubmit, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Filled.PlayArrow, "Run", tint = Secondary, modifier = Modifier.size(18.dp))
-            }
-        }
-    }
-}
 
-
-
-
-// --- Bottom Tab Button ---
-@Composable
-fun RowScope.BottomTabButton(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier.weight(1f),
-        colors = ButtonDefaults.textButtonColors(contentColor = if (selected) Primary else TextMuted)
-    ) {
-        Icon(icon, label, Modifier.size(14.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-    }
-}
 
 // --- Helpers ---
 fun getDefaultDir(): File {
