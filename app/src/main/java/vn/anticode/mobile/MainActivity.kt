@@ -14,18 +14,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -112,32 +108,28 @@ fun AnticodeMainApp() {
         mutableStateOf(listOf("claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.5", "gpt-5.4-mini", "deepseek-3.2"))
     }
 
-    // Navigation — start at LOGIN, only go to MAIN after explicit login
+    // Navigation
     var screen by remember { mutableStateOf(AppScreen.LOGIN) }
     var isLoggedIn by remember { mutableStateOf(false) }
 
-    // Auto-navigate: only go back to login when key is cleared (logout)
-    LaunchedEffect(apiKey) {
+    // Configure API + auto-login when key exists
+    LaunchedEffect(apiKey, baseUrl) {
         if (apiKey.isBlank()) {
             screen = AppScreen.LOGIN
             isLoggedIn = false
-        } else if (!isLoggedIn) {
-            // Key exists from previous session — verify it's still valid
+        } else {
             api.configure(baseUrl, apiKey)
-            val valid = api.testConnection()
-            if (valid) {
-                isLoggedIn = true
-                screen = AppScreen.MAIN
-            } else {
-                screen = AppScreen.LOGIN
+            if (!isLoggedIn) {
+                // Key from previous session — verify then auto-login
+                val valid = api.testConnection()
+                if (valid) {
+                    isLoggedIn = true
+                    screen = AppScreen.MAIN
+                } else {
+                    screen = AppScreen.LOGIN
+                }
             }
-        }
-    }
-
-    // Configure API
-    LaunchedEffect(apiKey, baseUrl) {
-        if (apiKey.isNotBlank()) {
-            api.configure(baseUrl, apiKey)
+            // Load models
             try {
                 val loaded = api.getModels()
                 if (loaded.isNotEmpty()) availableModels = loaded.map { it.id }
@@ -191,10 +183,13 @@ fun AnticodeMainApp() {
     fun applyCodeToFile(code: String) {
         openFile?.let {
             fileContent = code
-            fileDirty = true
-            saveFile()
+            val ok = FileManager.writeFile(it, fileContent)
+            fileDirty = false
             scope.launch {
-                snackbarHostState.showSnackbar("Applied to ${it.name}", duration = SnackbarDuration.Short)
+                snackbarHostState.showSnackbar(
+                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed to apply",
+                    duration = SnackbarDuration.Short
+                )
             }
         }
     }

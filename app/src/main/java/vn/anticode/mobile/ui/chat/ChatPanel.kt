@@ -374,7 +374,8 @@ sealed class MarkdownPart {
 
 fun parseMarkdown(content: String): List<MarkdownPart> {
     val parts = mutableListOf<MarkdownPart>()
-    val codeBlockRegex = Regex("```(\\w*)\\s*\\n([\\s\\S]*?)```")
+    // Match ```lang\ncode``` — language is optional, newline after lang is optional
+    val codeBlockRegex = Regex("```(\\w*)[\\t ]*\\n?([\\s\\S]*?)```")
 
     var lastIndex = 0
     codeBlockRegex.findAll(content).forEach { match ->
@@ -383,11 +384,14 @@ fun parseMarkdown(content: String): List<MarkdownPart> {
             val text = content.substring(lastIndex, match.range.first).trim()
             if (text.isNotEmpty()) parts.add(MarkdownPart.Text(text))
         }
-        // Code block
-        parts.add(MarkdownPart.CodeBlock(
-            language = match.groupValues[1],
-            code = match.groupValues[2]
-        ))
+        // Code block — trim leading/trailing blank lines from code
+        val code = match.groupValues[2].trimStart('\n').trimEnd('\n', ' ')
+        if (code.isNotEmpty()) {
+            parts.add(MarkdownPart.CodeBlock(
+                language = match.groupValues[1].ifEmpty { "text" },
+                code = code
+            ))
+        }
         lastIndex = match.range.last + 1
     }
     // Remaining text after last code block
