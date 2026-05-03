@@ -264,7 +264,7 @@ fun MessageBubble(
                         ) {
                             Icon(Icons.Filled.NoteAdd, null, Modifier.size(14.dp), tint = Secondary)
                             Spacer(Modifier.width(4.dp))
-                            Text("📄 Created: $name", color = Secondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            Text("Created: $name", color = Secondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         }
                     }
                 }

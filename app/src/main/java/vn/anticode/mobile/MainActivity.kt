@@ -211,7 +211,7 @@ fun AnticodeMainApp() {
 
     fun applyCodeToFile(code: String) {
         if (openFile == null) {
-            scope.launch { snackbarHostState.showSnackbar("❌ No file open!", duration = SnackbarDuration.Short) }
+            scope.launch { snackbarHostState.showSnackbar("No file open!", duration = SnackbarDuration.Short) }
             return
         }
         openFile?.let {
@@ -220,7 +220,7 @@ fun AnticodeMainApp() {
             fileDirty = false
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed",
+                    if (ok) "Applied to ${it.name}" else "Failed to apply",
                     duration = SnackbarDuration.Short
                 )
             }
@@ -232,9 +232,9 @@ fun AnticodeMainApp() {
         if (file != null && file.isFile) {
             FileManager.writeFile(file, content)
             openFileAction(file)
-            scope.launch { snackbarHostState.showSnackbar("✅ Created ${file.name}", duration = SnackbarDuration.Short) }
+            scope.launch { snackbarHostState.showSnackbar("Created ${file.name}", duration = SnackbarDuration.Short) }
         } else {
-            scope.launch { snackbarHostState.showSnackbar("❌ Failed to create $fileName", duration = SnackbarDuration.Short) }
+            scope.launch { snackbarHostState.showSnackbar("Failed to create $fileName", duration = SnackbarDuration.Short) }
         }
     }
 
@@ -289,7 +289,7 @@ fun AnticodeMainApp() {
                 if (dirFiles.isNotEmpty()) {
                     append("\n\n=== CURRENT DIR: ${currentDir.absolutePath} ===\n")
                     append(dirFiles.joinToString("\n") {
-                        (if (it.isDirectory) "📁 " else "📄 ") + it.name
+                        (if (it.isDirectory) "[DIR] " else "") + it.name
                     })
                 }
                 if (imageUrl != null) {
@@ -497,7 +497,7 @@ fun AnticodeMainApp() {
                                     Spacer(Modifier.height(12.dp))
                                     Text("Open a file to start", color = TextMuted, fontSize = 14.sp)
                                     Spacer(Modifier.height(4.dp))
-                                    Text("Use 📁 to browse files", color = TextMuted, fontSize = 11.sp)
+                                    Text("Tap folder icon to browse files", color = TextMuted, fontSize = 11.sp)
                                 }
                             }
                         }

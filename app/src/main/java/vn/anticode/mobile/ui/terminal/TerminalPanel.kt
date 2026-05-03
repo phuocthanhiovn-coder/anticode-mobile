@@ -115,7 +115,11 @@ fun TerminalPanel(
                         Spacer(Modifier.height(4.dp))
 
                         if (specsError != null) {
-                            Text("⚠ $specsError", color = Warning, fontSize = 10.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Warning, null, tint = Warning, modifier = Modifier.size(12.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(specsError!!, color = Warning, fontSize = 10.sp)
+                            }
                             Spacer(Modifier.height(4.dp))
                             TextButton(onClick = {
                                 scope.launch {
@@ -130,7 +134,11 @@ fun TerminalPanel(
                                 Text("Retry", color = Secondary, fontSize = 11.sp)
                             }
                         } else if (!TerminalManager.isConfigured()) {
-                            Text("⚠ Set API Key in Settings first", color = Warning, fontSize = 10.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Warning, null, tint = Warning, modifier = Modifier.size(12.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Set API Key in Settings first", color = Warning, fontSize = 10.sp)
+                            }
                         } else {
                             Text("Connected to Anticode VPS", color = TextMuted, fontSize = 10.sp)
                         }
@@ -143,10 +151,10 @@ fun TerminalPanel(
                                 shape = RoundedCornerShape(10.dp)
                             ) {
                                 Column(Modifier.padding(12.dp)) {
-                                    SpecRow("🖥️ OS", specs!!.os)
-                                    SpecRow("⚙️ CPU", "${specs!!.cpu} (${specs!!.cores} cores)")
-                                    SpecRow("🧠 RAM", specs!!.ram)
-                                    SpecRow("💾 Disk", specs!!.disk)
+                                    SpecRow(Icons.Filled.Computer, "OS", specs!!.os)
+                                    SpecRow(Icons.Filled.Memory, "CPU", "${specs!!.cpu} (${specs!!.cores} cores)")
+                                    SpecRow(Icons.Filled.Storage, "RAM", specs!!.ram)
+                                    SpecRow(Icons.Filled.SdStorage, "Disk", specs!!.disk)
                                 }
                             }
                         }
@@ -254,10 +262,11 @@ fun TerminalPanel(
 }
 
 @Composable
-fun SpecRow(icon: String, value: String) {
-    Row(Modifier.padding(vertical = 2.dp)) {
-        Text(icon, fontSize = 11.sp)
+fun SpecRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
+    Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, label, tint = TextMuted, modifier = Modifier.size(14.dp))
         Spacer(Modifier.width(6.dp))
+        Text("$label: ", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
         Text(value, color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
 }
