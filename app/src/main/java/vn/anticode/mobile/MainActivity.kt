@@ -160,8 +160,15 @@ fun AnticodeMainApp() {
 
 
 
+    // Snackbar
+    val snackbarHostState = remember { SnackbarHostState() }
+
     // --- Functions ---
     fun openFileAction(file: File) {
+        // Auto-save previous file if dirty
+        if (fileDirty && openFile != null) {
+            FileManager.writeFile(openFile!!, fileContent)
+        }
         openFile = file
         fileContent = FileManager.readFile(file)
         fileDirty = false
@@ -170,8 +177,25 @@ fun AnticodeMainApp() {
 
     fun saveFile() {
         openFile?.let {
-            FileManager.writeFile(it, fileContent)
+            val ok = FileManager.writeFile(it, fileContent)
             fileDirty = false
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    if (ok) "Saved ${it.name}" else "Failed to save",
+                    duration = SnackbarDuration.Short
+                )
+            }
+        }
+    }
+
+    fun applyCodeToFile(code: String) {
+        openFile?.let {
+            fileContent = code
+            fileDirty = true
+            saveFile()
+            scope.launch {
+                snackbarHostState.showSnackbar("Applied to ${it.name}", duration = SnackbarDuration.Short)
+            }
         }
     }
 
@@ -184,12 +208,26 @@ fun AnticodeMainApp() {
             streamContent = ""
 
             val systemPrompt = buildString {
-                append("You are Anticode AI, an expert coding assistant. Reply in the user's language.")
+                append("You are Anticode AI, an expert coding assistant. ")
+                append("Reply in the user's language. ")
+                append("IMPORTANT: When showing code changes, ALWAYS wrap code in ```language code blocks. ")
+                append("The user can click 'Apply' on code blocks to apply them to the current file. ")
+                append("So when editing a file, provide the COMPLETE updated file content in a single code block.")
                 if (openFile != null) {
-                    append("\n\nOpen file: ${openFile!!.name}")
+                    append("\n\n--- CURRENTLY OPEN FILE ---")
+                    append("\nFile: ${openFile!!.absolutePath}")
+                    append("\nLanguage: ${FileManager.getLanguage(openFile!!.extension)}")
                     append("\n```${FileManager.getLanguage(openFile!!.extension)}\n")
-                    append(fileContent.take(6000))
+                    append(fileContent.take(8000))
                     append("\n```")
+                }
+                // List files in current directory for context
+                val dirFiles = FileManager.listFiles(currentDir)
+                if (dirFiles.isNotEmpty()) {
+                    append("\n\n--- FILES IN CURRENT DIR: ${currentDir.absolutePath} ---")
+                    append("\n" + dirFiles.joinToString("\n") { 
+                        (if (it.isDirectory) "📁 " else "📄 ") + it.name 
+                    })
                 }
             }
 
@@ -300,7 +338,8 @@ fun AnticodeMainApp() {
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface)
                     )
                 },
-                containerColor = Background
+                containerColor = Background,
+                snackbarHost = { SnackbarHost(snackbarHostState) }
             ) { padding ->
                 Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                     // Top: Files + Editor
@@ -311,6 +350,22 @@ fun AnticodeMainApp() {
                                     currentDir = currentDir,
                                     onNavigate = { currentDir = it },
                                     onFileSelect = { openFileAction(it) },
+                                    onCreateFile = { file ->
+                                        if (file.isFile) openFileAction(file)
+                                        scope.launch { snackbarHostState.showSnackbar("Created ${file.name}", duration = SnackbarDuration.Short) }
+                                    },
+                                    onDeleteFile = { file ->
+                                        // If deleted file is currently open, close it
+                                        if (openFile?.absolutePath == file.absolutePath) {
+                                            openFile = null
+                                            fileContent = ""
+                                            fileDirty = false
+                                        }
+                                        scope.launch { snackbarHostState.showSnackbar("Deleted ${file.name}", duration = SnackbarDuration.Short) }
+                                    },
+                                    onRenameFile = { _, newName ->
+                                        scope.launch { snackbarHostState.showSnackbar("Renamed to $newName", duration = SnackbarDuration.Short) }
+                                    },
                                     modifier = Modifier.width(220.dp).fillMaxHeight()
                                 )
                                 VerticalDivider(color = Border, thickness = 0.5.dp)
@@ -346,6 +401,8 @@ fun AnticodeMainApp() {
                                     Icon(Icons.Filled.Code, null, tint = TextMuted, modifier = Modifier.size(48.dp))
                                     Spacer(Modifier.height(12.dp))
                                     Text("Open a file to start", color = TextMuted, fontSize = 14.sp)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("Use 📁 to browse files", color = TextMuted, fontSize = 11.sp)
                                 }
                             }
                         }
@@ -375,6 +432,8 @@ fun AnticodeMainApp() {
                                 modelName = selectedModel,
                                 onSend = { sendMessage(it) },
                                 onStop = { stopStreaming() },
+                                onApplyCode = { code -> applyCodeToFile(code) },
+                                hasOpenFile = openFile != null,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }

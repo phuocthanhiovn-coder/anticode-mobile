@@ -241,14 +241,14 @@ class AnticodeApi(
     }
 
     /**
-     * Check if API key is valid by calling /api/auth/me (requires auth).
+     * Check if API key is valid by calling /api/user/models (requires auth).
      * Returns true if server responds 200.
      */
     suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext false
         try {
             val request = Request.Builder()
-                .url("$baseUrl/api/auth/me")
+                .url("$baseUrl/api/user/models")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .get()
                 .build()
