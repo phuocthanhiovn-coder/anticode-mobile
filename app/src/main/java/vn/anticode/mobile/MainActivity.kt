@@ -38,9 +38,11 @@ import vn.anticode.mobile.ai.AnticodeApi
 import vn.anticode.mobile.ai.ChatMessage
 import vn.anticode.mobile.data.FileManager
 import vn.anticode.mobile.data.SettingsStore
+import vn.anticode.mobile.data.TerminalManager
 import vn.anticode.mobile.ui.chat.ChatPanel
 import vn.anticode.mobile.ui.files.FileExplorer
 import vn.anticode.mobile.ui.settings.SettingsScreen
+import vn.anticode.mobile.ui.terminal.TerminalPanel
 import vn.anticode.mobile.ui.theme.*
 import java.io.File
 
@@ -137,20 +139,22 @@ fun AnticodeMainApp() {
         }
     }
 
+    val editorFontSize by SettingsStore.getEditorFontSize(context).collectAsState(initial = 13f)
+    val chatFontSize by SettingsStore.getChatFontSize(context).collectAsState(initial = 13f)
+
     // UI state
     var showFiles by remember { mutableStateOf(false) }
     var currentDir by remember { mutableStateOf(getDefaultDir()) }
     var openFile by remember { mutableStateOf<File?>(null) }
     var fileContent by remember { mutableStateOf("") }
     var fileDirty by remember { mutableStateOf(false) }
+    var bottomTab by remember { mutableStateOf("chat") } // "chat" or "terminal"
 
     // Chat state
     var chatMessages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var isStreaming by remember { mutableStateOf(false) }
     var streamContent by remember { mutableStateOf("") }
     var streamJob by remember { mutableStateOf<Job?>(null) }
-
-
 
     // Snackbar
     val snackbarHostState = remember { SnackbarHostState() }
@@ -215,13 +219,29 @@ fun AnticodeMainApp() {
         }
     }
 
-    // Process AI response for file actions (<<<CREATE_FILE:name>>>)
+    // Process AI response for file actions and terminal commands
     fun processAIActions(response: String) {
+        // Create files
         val createRegex = Regex("<<<CREATE_FILE:(.+?)>>>\\s*```\\w*\\n([\\s\\S]*?)```")
         createRegex.findAll(response).forEach { match ->
             val fileName = match.groupValues[1].trim()
             val content = match.groupValues[2].trimEnd()
             createFileFromChat(fileName, content)
+        }
+
+        // Run terminal commands
+        val cmdRegex = Regex("<<<RUN_CMD:(.+?)>>>")
+        cmdRegex.findAll(response).forEach { match ->
+            val command = match.groupValues[1].trim()
+            scope.launch {
+                val result = TerminalManager.execute(command, currentDir)
+                val output = if (result.isError) "❌ $command\n${result.output}" else "✅ $command\n${result.output}"
+                chatMessages = chatMessages + ChatMessage("assistant", "```\n$ $command\n${result.output}\n```")
+                snackbarHostState.showSnackbar(
+                    if (result.isError) "Command failed" else "Command executed",
+                    duration = SnackbarDuration.Short
+                )
+            }
         }
     }
 
@@ -243,12 +263,15 @@ fun AnticodeMainApp() {
                 append("<<<CREATE_FILE:filename.ext>>>\n")
                 append("```language\nfile content here\n```\n")
                 append("The system will automatically create the file.\n")
+                append("4. RUN TERMINAL COMMANDS: Use this EXACT format:\n")
+                append("<<<RUN_CMD:command here>>>\n")
+                append("The system will execute the command and show output.\n")
                 append("3. ANSWER QUESTIONS: You can explain code, debug, suggest improvements.\n\n")
                 append("=== RULES ===\n")
                 append("- NEVER say 'I have created/edited the file' without providing code blocks.\n")
                 append("- NEVER lie about doing something you haven't done.\n")
                 append("- ALWAYS provide actual code in code blocks for any file changes.\n")
-                append("- You CANNOT run terminal commands, delete files, or access the internet.\n")
+                append("- For terminal commands, ALWAYS use <<<RUN_CMD:command>>> format.\n")
                 if (openFile != null) {
                     append("\n=== CURRENTLY OPEN FILE: ${openFile!!.name} ===\n")
                     append("Path: ${openFile!!.absolutePath}\n")
@@ -324,9 +347,13 @@ fun AnticodeMainApp() {
                 baseUrl = baseUrl,
                 selectedModel = selectedModel,
                 models = availableModels,
+                editorFontSize = editorFontSize,
+                chatFontSize = chatFontSize,
                 onApiKeyChange = { scope.launch { SettingsStore.setApiKey(context, it) } },
                 onBaseUrlChange = { scope.launch { SettingsStore.setBaseUrl(context, it) } },
                 onModelChange = { scope.launch { SettingsStore.setSelectedModel(context, it) } },
+                onEditorFontSizeChange = { scope.launch { SettingsStore.setEditorFontSize(context, it) } },
+                onChatFontSizeChange = { scope.launch { SettingsStore.setChatFontSize(context, it) } },
                 onBack = { screen = AppScreen.MAIN }
             )
         }
@@ -427,9 +454,9 @@ fun AnticodeMainApp() {
                                     modifier = Modifier.fillMaxSize().padding(8.dp),
                                     textStyle = TextStyle(
                                         color = TextPrimary,
-                                        fontSize = 13.sp,
+                                        fontSize = editorFontSize.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        lineHeight = 20.sp
+                                        lineHeight = (editorFontSize * 1.5f).sp
                                     ),
                                     cursorBrush = SolidColor(Primary)
                                 )
@@ -451,32 +478,72 @@ fun AnticodeMainApp() {
 
                     HorizontalDivider(color = Border, thickness = 0.5.dp)
 
-                    // Bottom: Chat panel
+                    // Bottom: Chat/Terminal panel with tab switcher
                     Column(modifier = Modifier.weight(0.8f)) {
-                        if (!api.isConfigured()) {
-                            Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
-                                    Spacer(Modifier.height(8.dp))
-                                    TextButton(onClick = { screen = AppScreen.SETTINGS }) {
-                                        Text("Open Settings", color = Primary)
+                        // Tab bar
+                        Row(
+                            modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = bottomTab == "chat",
+                                onClick = { bottomTab = "chat" },
+                                label = { Text("💬 Chat", fontSize = 11.sp) },
+                                modifier = Modifier.height(28.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Primary.copy(alpha = 0.2f),
+                                    selectedLabelColor = Primary
+                                )
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            FilterChip(
+                                selected = bottomTab == "terminal",
+                                onClick = { bottomTab = "terminal" },
+                                label = { Text("⌨ Terminal", fontSize = 11.sp) },
+                                modifier = Modifier.height(28.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Secondary.copy(alpha = 0.2f),
+                                    selectedLabelColor = Secondary
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = Border, thickness = 0.5.dp)
+
+                        when (bottomTab) {
+                            "chat" -> {
+                                if (!api.isConfigured()) {
+                                    Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(Icons.Filled.Key, null, tint = Warning, modifier = Modifier.size(32.dp))
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("Set API Key in Settings", color = TextSecondary, fontSize = 13.sp)
+                                            Spacer(Modifier.height(8.dp))
+                                            TextButton(onClick = { screen = AppScreen.SETTINGS }) {
+                                                Text("Open Settings", color = Primary)
+                                            }
+                                        }
                                     }
+                                } else {
+                                    ChatPanel(
+                                        messages = chatMessages,
+                                        isStreaming = isStreaming,
+                                        currentStreamContent = streamContent,
+                                        modelName = selectedModel,
+                                        onSend = { sendMessage(it) },
+                                        onStop = { stopStreaming() },
+                                        onApplyCode = { code -> applyCodeToFile(code) },
+                                        hasOpenFile = openFile != null,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
                             }
-                        } else {
-                            ChatPanel(
-                                messages = chatMessages,
-                                isStreaming = isStreaming,
-                                currentStreamContent = streamContent,
-                                modelName = selectedModel,
-                                onSend = { sendMessage(it) },
-                                onStop = { stopStreaming() },
-                                onApplyCode = { code -> applyCodeToFile(code) },
-                                hasOpenFile = openFile != null,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            "terminal" -> {
+                                TerminalPanel(
+                                    workingDir = currentDir,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }

@@ -27,9 +27,13 @@ fun SettingsScreen(
     baseUrl: String,
     selectedModel: String,
     models: List<String>,
+    editorFontSize: Float,
+    chatFontSize: Float,
     onApiKeyChange: (String) -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
+    onEditorFontSizeChange: (Float) -> Unit,
+    onChatFontSizeChange: (Float) -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
@@ -137,6 +141,27 @@ fun SettingsScreen(
 
             HorizontalDivider(color = Border)
 
+            // Section: Appearance
+            SectionLabel("Appearance")
+
+            // Editor font size
+            FontSizeSlider(
+                label = "Editor Font Size",
+                icon = Icons.Filled.Code,
+                value = editorFontSize,
+                onValueChange = onEditorFontSizeChange
+            )
+
+            // Chat font size
+            FontSizeSlider(
+                label = "Chat Font Size",
+                icon = Icons.Filled.Chat,
+                value = chatFontSize,
+                onValueChange = onChatFontSizeChange
+            )
+
+            HorizontalDivider(color = Border)
+
             // Status card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -171,6 +196,46 @@ fun SettingsScreen(
                     Spacer(Modifier.width(6.dp))
                     Text("Logout")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun FontSizeSlider(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    value: Float,
+    onValueChange: (Float) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = SurfaceVariant),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = Primary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.weight(1f))
+                Text("${value.toInt()}sp", color = Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Slider(
+                value = value,
+                onValueChange = onValueChange,
+                valueRange = 10f..24f,
+                steps = 13,
+                colors = SliderDefaults.colors(
+                    thumbColor = Primary,
+                    activeTrackColor = Primary,
+                    inactiveTrackColor = Border
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("10", color = TextMuted, fontSize = 9.sp)
+                Text("24", color = TextMuted, fontSize = 9.sp)
             }
         }
     }

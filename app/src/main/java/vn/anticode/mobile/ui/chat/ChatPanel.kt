@@ -179,8 +179,10 @@ fun MessageBubble(
                 )
             }
         } else {
-            // Clean <<<CREATE_FILE:>>> tags for display
-            val cleanContent = message.content.replace(Regex("<<<CREATE_FILE:.+?>>>\\s*"), "")
+            // Clean action tags for display
+            val cleanContent = message.content
+                .replace(Regex("<<<CREATE_FILE:.+?>>>\\s*"), "")
+                .replace(Regex("<<<RUN_CMD:.+?>>>\\s*"), "")
             val parts = parseMarkdown(cleanContent)
             Column(
                 modifier = Modifier
