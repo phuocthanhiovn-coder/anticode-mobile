@@ -33,38 +33,53 @@ data class TerminalEntry(
 
 @Composable
 fun TerminalPanel(
+    entries: List<TerminalEntry>,
+    onEntriesChange: (List<TerminalEntry>) -> Unit,
     modifier: Modifier = Modifier,
-    onTerminalOutput: ((String, String) -> Unit)? = null // (command, output) for AI awareness
+    onTerminalOutput: ((String, String) -> Unit)? = null
 ) {
     var inputText by remember { mutableStateOf("") }
-    var entries by remember { mutableStateOf(listOf<TerminalEntry>()) }
     var isRunning by remember { mutableStateOf(false) }
     var specs by remember { mutableStateOf<VpsSpecs?>(null) }
     var specsLoading by remember { mutableStateOf(true) }
+    var specsError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     // Load VPS specs on first open
     LaunchedEffect(Unit) {
-        specsLoading = true
-        specs = TerminalManager.getSpecs()
-        specsLoading = false
+        if (specs == null) {
+            specsLoading = true
+            specsError = null
+            val result = TerminalManager.getSpecs()
+            if (result.cores == "?") {
+                specsError = "Cannot connect to VPS"
+            } else {
+                specs = result
+            }
+            specsLoading = false
+        }
     }
 
-    // Auto-scroll
+    // Auto-scroll when entries change
     LaunchedEffect(entries.size) {
         if (entries.isNotEmpty()) listState.animateScrollToItem(entries.size - 1)
     }
 
     Column(modifier = modifier.background(CodeBackground)) {
-        // Header with VPS info
+        // Header with VPS info + connection status
         Row(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Filled.Terminal, null, tint = Secondary, modifier = Modifier.size(14.dp))
+            Icon(Icons.Filled.Cloud, null, tint = if (specs != null) Secondary else Warning, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
-            Text("VPS Terminal", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text(
+                if (specs != null) "VPS Terminal" else if (specsLoading) "Connecting..." else "VPS Offline",
+                color = if (specs != null) Secondary else Warning,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
             Spacer(Modifier.weight(1f))
             if (specs != null && !specsLoading) {
                 Text("${specs!!.cores} CPU • ${specs!!.ram} RAM", color = TextMuted, fontSize = 9.sp)
@@ -72,8 +87,10 @@ fun TerminalPanel(
                 CircularProgressIndicator(Modifier.size(8.dp), strokeWidth = 1.dp, color = TextMuted)
             }
             Spacer(Modifier.width(4.dp))
-            IconButton(onClick = { entries = emptyList() }, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Filled.DeleteSweep, "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
+            if (entries.isNotEmpty()) {
+                IconButton(onClick = { onEntriesChange(emptyList()) }, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Filled.DeleteSweep, "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
+                }
             }
         }
 
@@ -96,7 +113,27 @@ fun TerminalPanel(
                         Spacer(Modifier.height(8.dp))
                         Text("Cloud Terminal", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(4.dp))
-                        Text("Connected to Anticode VPS", color = TextMuted, fontSize = 10.sp)
+
+                        if (specsError != null) {
+                            Text("⚠ $specsError", color = Warning, fontSize = 10.sp)
+                            Spacer(Modifier.height(4.dp))
+                            TextButton(onClick = {
+                                scope.launch {
+                                    specsLoading = true
+                                    specsError = null
+                                    val result = TerminalManager.getSpecs()
+                                    if (result.cores == "?") specsError = "Cannot connect to VPS"
+                                    else specs = result
+                                    specsLoading = false
+                                }
+                            }) {
+                                Text("Retry", color = Secondary, fontSize = 11.sp)
+                            }
+                        } else if (!TerminalManager.isConfigured()) {
+                            Text("⚠ Set API Key in Settings first", color = Warning, fontSize = 10.sp)
+                        } else {
+                            Text("Connected to Anticode VPS", color = TextMuted, fontSize = 10.sp)
+                        }
 
                         if (specs != null && !specsLoading) {
                             Spacer(Modifier.height(12.dp))
@@ -115,7 +152,7 @@ fun TerminalPanel(
                         }
 
                         Spacer(Modifier.height(8.dp))
-                        Text("Try: ls, python3 --version, node --version, pip install ...", 
+                        Text("Try: ls, python3 --version, node --version, pip install ...",
                             color = TextMuted, fontSize = 9.sp)
                     }
                 }
@@ -189,15 +226,17 @@ fun TerminalPanel(
                     if (cmd.isNotBlank() && !isRunning) {
                         inputText = ""
                         isRunning = true
-                        val idx = entries.size
-                        entries = entries + TerminalEntry(cmd, isRunning = true)
+                        val newEntries = entries + TerminalEntry(cmd, isRunning = true)
+                        onEntriesChange(newEntries)
+                        val idx = newEntries.size - 1
                         scope.launch {
                             val result = TerminalManager.execute(cmd)
-                            entries = entries.mapIndexed { i, e ->
-                                if (i == idx) e.copy(result = result, isRunning = false) else e
-                            }
+                            onEntriesChange(
+                                newEntries.mapIndexed { i, e ->
+                                    if (i == idx) e.copy(result = result, isRunning = false) else e
+                                }
+                            )
                             isRunning = false
-                            // Notify AI about terminal output
                             onTerminalOutput?.invoke(cmd, result.output)
                         }
                     }

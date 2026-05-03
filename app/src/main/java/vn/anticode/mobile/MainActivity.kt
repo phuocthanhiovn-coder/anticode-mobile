@@ -43,6 +43,7 @@ import vn.anticode.mobile.data.TerminalManager
 import vn.anticode.mobile.ui.chat.ChatPanel
 import vn.anticode.mobile.ui.files.FileExplorer
 import vn.anticode.mobile.ui.settings.SettingsScreen
+import vn.anticode.mobile.ui.terminal.TerminalEntry
 import vn.anticode.mobile.ui.terminal.TerminalPanel
 import vn.anticode.mobile.ui.theme.*
 import java.io.File
@@ -153,7 +154,8 @@ fun AnticodeMainApp() {
     var fileDirty by remember { mutableStateOf(false) }
     var bottomTab by remember { mutableStateOf("chat") }
 
-    // Terminal history for AI awareness
+    // Terminal state (hoisted so it persists across tab switches)
+    var terminalEntries by remember { mutableStateOf(listOf<TerminalEntry>()) }
     var terminalHistory by remember { mutableStateOf(listOf<String>()) }
 
     // Chat state
@@ -600,9 +602,10 @@ fun AnticodeMainApp() {
                             }
                             "terminal" -> {
                                 TerminalPanel(
+                                    entries = terminalEntries,
+                                    onEntriesChange = { terminalEntries = it },
                                     modifier = Modifier.fillMaxSize(),
                                     onTerminalOutput = { cmd, output ->
-                                        // Store for AI awareness (keep last 5)
                                         terminalHistory = (terminalHistory + "$ $cmd\n$output").takeLast(5)
                                     }
                                 )
