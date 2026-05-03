@@ -181,16 +181,47 @@ fun AnticodeMainApp() {
     }
 
     fun applyCodeToFile(code: String) {
+        if (openFile == null) {
+            scope.launch {
+                snackbarHostState.showSnackbar("❌ No file open! Open a file first.", duration = SnackbarDuration.Short)
+            }
+            return
+        }
         openFile?.let {
             fileContent = code
             val ok = FileManager.writeFile(it, fileContent)
             fileDirty = false
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed to apply",
+                    if (ok) "✅ Applied to ${it.name}" else "❌ Failed to apply (check permissions)",
                     duration = SnackbarDuration.Short
                 )
             }
+        }
+    }
+
+    fun createFileFromChat(fileName: String, content: String) {
+        val file = FileManager.createFile(currentDir, fileName)
+        if (file != null && file.isFile) {
+            FileManager.writeFile(file, content)
+            openFileAction(file)
+            scope.launch {
+                snackbarHostState.showSnackbar("✅ Created ${file.name}", duration = SnackbarDuration.Short)
+            }
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("❌ Failed to create $fileName (check permissions)", duration = SnackbarDuration.Short)
+            }
+        }
+    }
+
+    // Process AI response for file actions (<<<CREATE_FILE:name>>>)
+    fun processAIActions(response: String) {
+        val createRegex = Regex("<<<CREATE_FILE:(.+?)>>>\\s*```\\w*\\n([\\s\\S]*?)```")
+        createRegex.findAll(response).forEach { match ->
+            val fileName = match.groupValues[1].trim()
+            val content = match.groupValues[2].trimEnd()
+            createFileFromChat(fileName, content)
         }
     }
 
@@ -203,25 +234,38 @@ fun AnticodeMainApp() {
             streamContent = ""
 
             val systemPrompt = buildString {
-                append("You are Anticode AI, an expert coding assistant. ")
-                append("Reply in the user's language. ")
-                append("IMPORTANT: When showing code changes, ALWAYS wrap code in ```language code blocks. ")
-                append("The user can click 'Apply' on code blocks to apply them to the current file. ")
-                append("So when editing a file, provide the COMPLETE updated file content in a single code block.")
+                append("You are Anticode AI, a coding assistant inside a mobile code editor.\n")
+                append("Reply in the user's language.\n\n")
+                append("=== YOUR CAPABILITIES ===\n")
+                append("1. EDIT OPEN FILE: Show the COMPLETE updated file in a ```language code block. ")
+                append("The user will click 'Apply' to save it.\n")
+                append("2. CREATE NEW FILE: Use this EXACT format:\n")
+                append("<<<CREATE_FILE:filename.ext>>>\n")
+                append("```language\nfile content here\n```\n")
+                append("The system will automatically create the file.\n")
+                append("3. ANSWER QUESTIONS: You can explain code, debug, suggest improvements.\n\n")
+                append("=== RULES ===\n")
+                append("- NEVER say 'I have created/edited the file' without providing code blocks.\n")
+                append("- NEVER lie about doing something you haven't done.\n")
+                append("- ALWAYS provide actual code in code blocks for any file changes.\n")
+                append("- You CANNOT run terminal commands, delete files, or access the internet.\n")
                 if (openFile != null) {
-                    append("\n\n--- CURRENTLY OPEN FILE ---")
-                    append("\nFile: ${openFile!!.absolutePath}")
-                    append("\nLanguage: ${FileManager.getLanguage(openFile!!.extension)}")
-                    append("\n```${FileManager.getLanguage(openFile!!.extension)}\n")
+                    append("\n=== CURRENTLY OPEN FILE: ${openFile!!.name} ===\n")
+                    append("Path: ${openFile!!.absolutePath}\n")
+                    append("Language: ${FileManager.getLanguage(openFile!!.extension)}\n")
+                    append("```${FileManager.getLanguage(openFile!!.extension)}\n")
                     append(fileContent.take(8000))
                     append("\n```")
+                } else {
+                    append("\n=== NO FILE IS OPEN ===\n")
+                    append("The user has no file open. If they want to create a file, use <<<CREATE_FILE:name>>>")
                 }
-                // List files in current directory for context
+                // List files in current directory
                 val dirFiles = FileManager.listFiles(currentDir)
                 if (dirFiles.isNotEmpty()) {
-                    append("\n\n--- FILES IN CURRENT DIR: ${currentDir.absolutePath} ---")
-                    append("\n" + dirFiles.joinToString("\n") { 
-                        (if (it.isDirectory) "📁 " else "📄 ") + it.name 
+                    append("\n\n=== CURRENT DIR: ${currentDir.absolutePath} ===\n")
+                    append(dirFiles.joinToString("\n") {
+                        (if (it.isDirectory) "📁 " else "📄 ") + it.name
                     })
                 }
             }
@@ -239,6 +283,8 @@ fun AnticodeMainApp() {
 
                 if (streamContent.isNotBlank()) {
                     chatMessages = chatMessages + ChatMessage("assistant", streamContent)
+                    // Process AI actions (auto-create files)
+                    processAIActions(streamContent)
                 }
             } catch (e: Exception) {
                 chatMessages = chatMessages + ChatMessage("assistant", "[Error: ${e.message}]")

@@ -179,8 +179,9 @@ fun MessageBubble(
                 )
             }
         } else {
-            // AI message — parse markdown with code blocks
-            val parts = parseMarkdown(message.content)
+            // Clean <<<CREATE_FILE:>>> tags for display
+            val cleanContent = message.content.replace(Regex("<<<CREATE_FILE:.+?>>>\\s*"), "")
+            val parts = parseMarkdown(cleanContent)
             Column(
                 modifier = Modifier
                     .widthIn(max = 340.dp)
@@ -189,6 +190,26 @@ fun MessageBubble(
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // Show file created indicator
+                if (message.content.contains("<<<CREATE_FILE:")) {
+                    val fileNames = Regex("<<<CREATE_FILE:(.+?)>>>").findAll(message.content)
+                        .map { it.groupValues[1].trim() }.toList()
+                    fileNames.forEach { name ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Secondary.copy(alpha = 0.15f))
+                                .padding(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.NoteAdd, null, Modifier.size(14.dp), tint = Secondary)
+                            Spacer(Modifier.width(4.dp))
+                            Text("📄 Created: $name", color = Secondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
                 parts.forEach { part ->
                     when (part) {
                         is MarkdownPart.Text -> {
