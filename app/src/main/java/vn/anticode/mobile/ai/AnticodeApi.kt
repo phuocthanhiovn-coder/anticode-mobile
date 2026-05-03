@@ -105,9 +105,16 @@ class AnticodeApi(
                     if (!response.isSuccessful) {
                         val errBody = response.body?.string() ?: ""
                         // Parse server error message
+                        // Server may return {"error":"message"} or {"error":{"message":"..."}}
                         val errMsg = try {
                             val obj = JsonParser.parseString(errBody).asJsonObject
-                            obj.getAsJsonObject("error")?.get("message")?.asString ?: errBody
+                            val errField = obj.get("error")
+                            when {
+                                errField == null -> "HTTP ${response.code}: $errBody"
+                                errField.isJsonObject -> errField.asJsonObject.get("message")?.asString ?: errBody
+                                errField.isJsonPrimitive -> errField.asString
+                                else -> errBody
+                            }
                         } catch (_: Exception) {
                             "HTTP ${response.code}: $errBody"
                         }
@@ -234,14 +241,14 @@ class AnticodeApi(
     }
 
     /**
-     * Check if API key is valid by calling /v1/models.
+     * Check if API key is valid by calling /api/auth/me (requires auth).
      * Returns true if server responds 200.
      */
     suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext false
         try {
             val request = Request.Builder()
-                .url("$baseUrl/v1/models")
+                .url("$baseUrl/api/auth/me")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .get()
                 .build()

@@ -112,15 +112,25 @@ fun AnticodeMainApp() {
         mutableStateOf(listOf("claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.5", "gpt-5.4-mini", "deepseek-3.2"))
     }
 
-    // Navigation
-    var screen by remember { mutableStateOf(if (apiKey.isBlank()) AppScreen.LOGIN else AppScreen.MAIN) }
+    // Navigation — start at LOGIN, only go to MAIN after explicit login
+    var screen by remember { mutableStateOf(AppScreen.LOGIN) }
+    var isLoggedIn by remember { mutableStateOf(false) }
 
-    // Auto-navigate: if API key becomes blank → login, if filled → main
+    // Auto-navigate: only go back to login when key is cleared (logout)
     LaunchedEffect(apiKey) {
         if (apiKey.isBlank()) {
             screen = AppScreen.LOGIN
-        } else if (screen == AppScreen.LOGIN) {
-            screen = AppScreen.MAIN
+            isLoggedIn = false
+        } else if (!isLoggedIn) {
+            // Key exists from previous session — verify it's still valid
+            api.configure(baseUrl, apiKey)
+            val valid = api.testConnection()
+            if (valid) {
+                isLoggedIn = true
+                screen = AppScreen.MAIN
+            } else {
+                screen = AppScreen.LOGIN
+            }
         }
     }
 
@@ -225,7 +235,7 @@ fun AnticodeMainApp() {
                 baseUrl = baseUrl,
                 onApiKeyChange = { scope.launch { SettingsStore.setApiKey(context, it) } },
                 onBaseUrlChange = { scope.launch { SettingsStore.setBaseUrl(context, it) } },
-                onLogin = { if (apiKey.isNotBlank()) screen = AppScreen.MAIN }
+                onLogin = { if (apiKey.isNotBlank()) { isLoggedIn = true; screen = AppScreen.MAIN } }
             )
         }
 
