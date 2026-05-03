@@ -1,6 +1,7 @@
 package vn.anticode.mobile.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -16,6 +17,9 @@ object SettingsStore {
     private val SELECTED_MODEL = stringPreferencesKey("selected_model")
     private val EDITOR_FONT_SIZE = floatPreferencesKey("editor_font_size")
     private val CHAT_FONT_SIZE = floatPreferencesKey("chat_font_size")
+    private val SHOW_LINE_NUMBERS = booleanPreferencesKey("show_line_numbers")
+    private val WORD_WRAP = booleanPreferencesKey("word_wrap")
+    private val EDITOR_THEME = stringPreferencesKey("editor_theme") // dark, monokai, github
 
     fun getApiKey(context: Context): Flow<String> =
         context.dataStore.data.map { it[API_KEY] ?: "" }
@@ -31,6 +35,15 @@ object SettingsStore {
 
     fun getChatFontSize(context: Context): Flow<Float> =
         context.dataStore.data.map { it[CHAT_FONT_SIZE] ?: 13f }
+
+    fun getShowLineNumbers(context: Context): Flow<Boolean> =
+        context.dataStore.data.map { it[SHOW_LINE_NUMBERS] ?: true }
+
+    fun getWordWrap(context: Context): Flow<Boolean> =
+        context.dataStore.data.map { it[WORD_WRAP] ?: false }
+
+    fun getEditorTheme(context: Context): Flow<String> =
+        context.dataStore.data.map { it[EDITOR_THEME] ?: "dark" }
 
     suspend fun setApiKey(context: Context, key: String) {
         context.dataStore.edit { it[API_KEY] = key }
@@ -50,5 +63,17 @@ object SettingsStore {
 
     suspend fun setChatFontSize(context: Context, size: Float) {
         context.dataStore.edit { it[CHAT_FONT_SIZE] = size }
+    }
+
+    suspend fun setShowLineNumbers(context: Context, show: Boolean) {
+        context.dataStore.edit { it[SHOW_LINE_NUMBERS] = show }
+    }
+
+    suspend fun setWordWrap(context: Context, wrap: Boolean) {
+        context.dataStore.edit { it[WORD_WRAP] = wrap }
+    }
+
+    suspend fun setEditorTheme(context: Context, theme: String) {
+        context.dataStore.edit { it[EDITOR_THEME] = theme }
     }
 }

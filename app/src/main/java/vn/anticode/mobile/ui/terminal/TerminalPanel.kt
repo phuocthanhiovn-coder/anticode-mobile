@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -21,8 +22,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import vn.anticode.mobile.data.TerminalManager
 import vn.anticode.mobile.data.TerminalResult
+import vn.anticode.mobile.data.VpsSpecs
 import vn.anticode.mobile.ui.theme.*
-import java.io.File
 
 data class TerminalEntry(
     val command: String,
@@ -32,14 +33,23 @@ data class TerminalEntry(
 
 @Composable
 fun TerminalPanel(
-    workingDir: File,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTerminalOutput: ((String, String) -> Unit)? = null // (command, output) for AI awareness
 ) {
     var inputText by remember { mutableStateOf("") }
     var entries by remember { mutableStateOf(listOf<TerminalEntry>()) }
     var isRunning by remember { mutableStateOf(false) }
+    var specs by remember { mutableStateOf<VpsSpecs?>(null) }
+    var specsLoading by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // Load VPS specs on first open
+    LaunchedEffect(Unit) {
+        specsLoading = true
+        specs = TerminalManager.getSpecs()
+        specsLoading = false
+    }
 
     // Auto-scroll
     LaunchedEffect(entries.size) {
@@ -47,18 +57,21 @@ fun TerminalPanel(
     }
 
     Column(modifier = modifier.background(CodeBackground)) {
-        // Header
+        // Header with VPS info
         Row(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Filled.Terminal, null, tint = Secondary, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Terminal", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text("VPS Terminal", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
-            Text(workingDir.absolutePath, color = TextMuted, fontSize = 9.sp, maxLines = 1)
+            if (specs != null && !specsLoading) {
+                Text("${specs!!.cores} CPU • ${specs!!.ram} RAM", color = TextMuted, fontSize = 9.sp)
+            } else if (specsLoading) {
+                CircularProgressIndicator(Modifier.size(8.dp), strokeWidth = 1.dp, color = TextMuted)
+            }
             Spacer(Modifier.width(4.dp))
-            // Clear button
             IconButton(onClick = { entries = emptyList() }, modifier = Modifier.size(24.dp)) {
                 Icon(Icons.Filled.DeleteSweep, "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
             }
@@ -72,23 +85,44 @@ fun TerminalPanel(
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
+            // Welcome + specs card
             if (entries.isEmpty()) {
                 item {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(Icons.Filled.Terminal, null, tint = TextMuted, modifier = Modifier.size(28.dp))
+                        Icon(Icons.Filled.Cloud, null, tint = Secondary, modifier = Modifier.size(28.dp))
                         Spacer(Modifier.height(8.dp))
-                        Text("Shell Terminal", color = TextMuted, fontSize = 12.sp)
+                        Text("Cloud Terminal", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(4.dp))
-                        Text("Run commands: ls, cat, pwd, mkdir, echo...", color = TextMuted, fontSize = 10.sp)
+                        Text("Connected to Anticode VPS", color = TextMuted, fontSize = 10.sp)
+
+                        if (specs != null && !specsLoading) {
+                            Spacer(Modifier.height(12.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = SurfaceVariant),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    SpecRow("🖥️ OS", specs!!.os)
+                                    SpecRow("⚙️ CPU", "${specs!!.cpu} (${specs!!.cores} cores)")
+                                    SpecRow("🧠 RAM", specs!!.ram)
+                                    SpecRow("💾 Disk", specs!!.disk)
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        Text("Try: ls, python3 --version, node --version, pip install ...", 
+                            color = TextMuted, fontSize = 9.sp)
                     }
                 }
             }
 
             items(entries) { entry ->
-                // Command line
+                // Command
                 SelectionContainer {
                     Text(
                         "$ ${entry.command}",
@@ -100,14 +134,13 @@ fun TerminalPanel(
                 }
 
                 if (entry.isRunning) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp, color = Primary)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                        CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp, color = Secondary)
                         Spacer(Modifier.width(6.dp))
-                        Text("Running...", color = TextMuted, fontSize = 10.sp)
+                        Text("Running on VPS...", color = TextMuted, fontSize = 10.sp)
                     }
                 }
 
-                // Output
                 entry.result?.let { result ->
                     SelectionContainer {
                         Text(
@@ -156,14 +189,16 @@ fun TerminalPanel(
                     if (cmd.isNotBlank() && !isRunning) {
                         inputText = ""
                         isRunning = true
-                        val entry = TerminalEntry(cmd, isRunning = true)
-                        entries = entries + entry
+                        val idx = entries.size
+                        entries = entries + TerminalEntry(cmd, isRunning = true)
                         scope.launch {
-                            val result = TerminalManager.execute(cmd, workingDir)
-                            entries = entries.map {
-                                if (it.command == cmd && it.isRunning) it.copy(result = result, isRunning = false) else it
+                            val result = TerminalManager.execute(cmd)
+                            entries = entries.mapIndexed { i, e ->
+                                if (i == idx) e.copy(result = result, isRunning = false) else e
                             }
                             isRunning = false
+                            // Notify AI about terminal output
+                            onTerminalOutput?.invoke(cmd, result.output)
                         }
                     }
                 },
@@ -176,5 +211,14 @@ fun TerminalPanel(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun SpecRow(icon: String, value: String) {
+    Row(Modifier.padding(vertical = 2.dp)) {
+        Text(icon, fontSize = 11.sp)
+        Spacer(Modifier.width(6.dp))
+        Text(value, color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
 }

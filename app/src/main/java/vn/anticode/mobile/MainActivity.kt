@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -114,15 +115,15 @@ fun AnticodeMainApp() {
     var screen by remember { mutableStateOf(AppScreen.LOGIN) }
     var isLoggedIn by remember { mutableStateOf(false) }
 
-    // Configure API + auto-login when key exists
+    // Configure API + Terminal + auto-login when key exists
     LaunchedEffect(apiKey, baseUrl) {
         if (apiKey.isBlank()) {
             screen = AppScreen.LOGIN
             isLoggedIn = false
         } else {
             api.configure(baseUrl, apiKey)
+            TerminalManager.configure(baseUrl, apiKey)
             if (!isLoggedIn) {
-                // Key from previous session — verify then auto-login
                 val valid = api.testConnection()
                 if (valid) {
                     isLoggedIn = true
@@ -131,7 +132,6 @@ fun AnticodeMainApp() {
                     screen = AppScreen.LOGIN
                 }
             }
-            // Load models
             try {
                 val loaded = api.getModels()
                 if (loaded.isNotEmpty()) availableModels = loaded.map { it.id }
@@ -141,6 +141,9 @@ fun AnticodeMainApp() {
 
     val editorFontSize by SettingsStore.getEditorFontSize(context).collectAsState(initial = 13f)
     val chatFontSize by SettingsStore.getChatFontSize(context).collectAsState(initial = 13f)
+    val showLineNumbers by SettingsStore.getShowLineNumbers(context).collectAsState(initial = true)
+    val wordWrap by SettingsStore.getWordWrap(context).collectAsState(initial = false)
+    val editorTheme by SettingsStore.getEditorTheme(context).collectAsState(initial = "dark")
 
     // UI state
     var showFiles by remember { mutableStateOf(false) }
@@ -148,7 +151,10 @@ fun AnticodeMainApp() {
     var openFile by remember { mutableStateOf<File?>(null) }
     var fileContent by remember { mutableStateOf("") }
     var fileDirty by remember { mutableStateOf(false) }
-    var bottomTab by remember { mutableStateOf("chat") } // "chat" or "terminal"
+    var bottomTab by remember { mutableStateOf("chat") }
+
+    // Terminal history for AI awareness
+    var terminalHistory by remember { mutableStateOf(listOf<String>()) }
 
     // Chat state
     var chatMessages by remember { mutableStateOf(listOf<ChatMessage>()) }
@@ -291,6 +297,12 @@ fun AnticodeMainApp() {
                         (if (it.isDirectory) "📁 " else "📄 ") + it.name
                     })
                 }
+                // Terminal history for AI awareness
+                if (terminalHistory.isNotEmpty()) {
+                    append("\n\n=== RECENT TERMINAL OUTPUT (VPS) ===\n")
+                    append(terminalHistory.joinToString("\n---\n"))
+                    append("\n\nYou can see what commands were run and their output. Analyze errors and suggest fixes.")
+                }
             }
 
             try {
@@ -349,11 +361,17 @@ fun AnticodeMainApp() {
                 models = availableModels,
                 editorFontSize = editorFontSize,
                 chatFontSize = chatFontSize,
+                showLineNumbers = showLineNumbers,
+                wordWrap = wordWrap,
+                editorTheme = editorTheme,
                 onApiKeyChange = { scope.launch { SettingsStore.setApiKey(context, it) } },
                 onBaseUrlChange = { scope.launch { SettingsStore.setBaseUrl(context, it) } },
                 onModelChange = { scope.launch { SettingsStore.setSelectedModel(context, it) } },
                 onEditorFontSizeChange = { scope.launch { SettingsStore.setEditorFontSize(context, it) } },
                 onChatFontSizeChange = { scope.launch { SettingsStore.setChatFontSize(context, it) } },
+                onShowLineNumbersChange = { scope.launch { SettingsStore.setShowLineNumbers(context, it) } },
+                onWordWrapChange = { scope.launch { SettingsStore.setWordWrap(context, it) } },
+                onEditorThemeChange = { scope.launch { SettingsStore.setEditorTheme(context, it) } },
                 onBack = { screen = AppScreen.MAIN }
             )
         }
@@ -440,26 +458,68 @@ fun AnticodeMainApp() {
                             }
                         }
 
-                        // Editor
+                        // Editor with theme
+                        val editorBg = when (editorTheme) {
+                            "monokai" -> Color(0xFF272822)
+                            "ocean" -> Color(0xFF1B2B34)
+                            else -> CodeBackground
+                        }
+                        val editorFg = when (editorTheme) {
+                            "monokai" -> Color(0xFFF8F8F2)
+                            "ocean" -> Color(0xFFD8DEE9)
+                            else -> TextPrimary
+                        }
+                        val lineNumColor = when (editorTheme) {
+                            "monokai" -> Color(0xFF75715E)
+                            "ocean" -> Color(0xFF65737E)
+                            else -> TextMuted
+                        }
+
                         Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight().background(CodeBackground)
+                            modifier = Modifier.weight(1f).fillMaxHeight().background(editorBg)
                         ) {
                             if (openFile != null) {
-                                BasicTextField(
-                                    value = fileContent,
-                                    onValueChange = {
-                                        fileContent = it
-                                        fileDirty = true
-                                    },
-                                    modifier = Modifier.fillMaxSize().padding(8.dp),
-                                    textStyle = TextStyle(
-                                        color = TextPrimary,
-                                        fontSize = editorFontSize.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        lineHeight = (editorFontSize * 1.5f).sp
-                                    ),
-                                    cursorBrush = SolidColor(Primary)
-                                )
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    // Line numbers column
+                                    if (showLineNumbers) {
+                                        val lineCount = fileContent.count { it == '\n' } + 1
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .background(editorBg.copy(alpha = 0.8f))
+                                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                                            horizontalAlignment = Alignment.End
+                                        ) {
+                                            for (i in 1..lineCount.coerceAtMost(500)) {
+                                                Text(
+                                                    "$i",
+                                                    color = lineNumColor,
+                                                    fontSize = editorFontSize.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    lineHeight = (editorFontSize * 1.5f).sp
+                                                )
+                                            }
+                                        }
+                                        VerticalDivider(color = Border.copy(alpha = 0.3f), thickness = 0.5.dp)
+                                    }
+
+                                    // Code editor
+                                    BasicTextField(
+                                        value = fileContent,
+                                        onValueChange = {
+                                            fileContent = it
+                                            fileDirty = true
+                                        },
+                                        modifier = Modifier.weight(1f).fillMaxHeight().padding(8.dp),
+                                        textStyle = TextStyle(
+                                            color = editorFg,
+                                            fontSize = editorFontSize.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            lineHeight = (editorFontSize * 1.5f).sp
+                                        ),
+                                        cursorBrush = SolidColor(Primary)
+                                    )
+                                }
                             } else {
                                 Column(
                                     modifier = Modifier.fillMaxSize(),
@@ -540,8 +600,11 @@ fun AnticodeMainApp() {
                             }
                             "terminal" -> {
                                 TerminalPanel(
-                                    workingDir = currentDir,
-                                    modifier = Modifier.fillMaxSize()
+                                    modifier = Modifier.fillMaxSize(),
+                                    onTerminalOutput = { cmd, output ->
+                                        // Store for AI awareness (keep last 5)
+                                        terminalHistory = (terminalHistory + "$ $cmd\n$output").takeLast(5)
+                                    }
                                 )
                             }
                         }

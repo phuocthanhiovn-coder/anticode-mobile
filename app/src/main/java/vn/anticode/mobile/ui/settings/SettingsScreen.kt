@@ -1,6 +1,8 @@
 package vn.anticode.mobile.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,11 +10,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -29,11 +34,17 @@ fun SettingsScreen(
     models: List<String>,
     editorFontSize: Float,
     chatFontSize: Float,
+    showLineNumbers: Boolean,
+    wordWrap: Boolean,
+    editorTheme: String,
     onApiKeyChange: (String) -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
     onEditorFontSizeChange: (Float) -> Unit,
     onChatFontSizeChange: (Float) -> Unit,
+    onShowLineNumbersChange: (Boolean) -> Unit,
+    onWordWrapChange: (Boolean) -> Unit,
+    onEditorThemeChange: (String) -> Unit,
     onBack: () -> Unit
 ) {
     var showKey by remember { mutableStateOf(false) }
@@ -162,6 +173,52 @@ fun SettingsScreen(
 
             HorizontalDivider(color = Border)
 
+            // Section: Editor
+            SectionLabel("Editor Options")
+
+            // Line Numbers toggle
+            SettingsToggle(
+                icon = Icons.Filled.FormatListNumbered,
+                label = "Line Numbers",
+                description = "Show line numbers in editor",
+                checked = showLineNumbers,
+                onCheckedChange = onShowLineNumbersChange
+            )
+
+            // Word Wrap toggle
+            SettingsToggle(
+                icon = Icons.AutoMirrored.Filled.WrapText,
+                label = "Word Wrap",
+                description = "Wrap long lines in editor",
+                checked = wordWrap,
+                onCheckedChange = onWordWrapChange
+            )
+
+            HorizontalDivider(color = Border)
+
+            // Section: Theme
+            SectionLabel("Editor Theme")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ThemeCard("Dark", editorTheme == "dark",
+                    bg = Color(0xFF0D1117), fg = Color(0xFFE6EDF3),
+                    accent = Color(0xFF7B61FF), onClick = { onEditorThemeChange("dark") },
+                    modifier = Modifier.weight(1f))
+                ThemeCard("Monokai", editorTheme == "monokai",
+                    bg = Color(0xFF272822), fg = Color(0xFFF8F8F2),
+                    accent = Color(0xFFA6E22E), onClick = { onEditorThemeChange("monokai") },
+                    modifier = Modifier.weight(1f))
+                ThemeCard("Ocean", editorTheme == "ocean",
+                    bg = Color(0xFF1B2B34), fg = Color(0xFFD8DEE9),
+                    accent = Color(0xFF6699CC), onClick = { onEditorThemeChange("ocean") },
+                    modifier = Modifier.weight(1f))
+            }
+
+            HorizontalDivider(color = Border)
+
             // Status card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -197,7 +254,73 @@ fun SettingsScreen(
                     Text("Logout")
                 }
             }
+
+            Spacer(Modifier.height(40.dp))
         }
+    }
+}
+
+@Composable
+fun SettingsToggle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = SurfaceVariant),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, tint = Primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(label, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(description, color = TextMuted, fontSize = 10.sp)
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Primary,
+                    checkedTrackColor = Primary.copy(alpha = 0.3f),
+                    uncheckedThumbColor = TextMuted,
+                    uncheckedTrackColor = Border
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun ThemeCard(
+    name: String,
+    selected: Boolean,
+    bg: Color,
+    fg: Color,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .then(if (selected) Modifier.border(2.dp, Primary, RoundedCornerShape(10.dp)) else Modifier.border(1.dp, Border, RoundedCornerShape(10.dp)))
+            .clickable(onClick = onClick)
+            .background(bg)
+            .padding(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Preview
+        Text("fn()", color = accent, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Text("code", color = fg, fontSize = 8.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(name, color = if (selected) Primary else fg.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -233,10 +356,6 @@ fun FontSizeSlider(
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("10", color = TextMuted, fontSize = 9.sp)
-                Text("24", color = TextMuted, fontSize = 9.sp)
-            }
         }
     }
 }
