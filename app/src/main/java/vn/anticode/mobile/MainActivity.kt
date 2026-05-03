@@ -240,7 +240,7 @@ fun AnticodeMainApp() {
         cmdRegex.findAll(response).forEach { match ->
             val command = match.groupValues[1].trim()
             scope.launch {
-                val result = TerminalManager.execute(command, currentDir)
+                val result = TerminalManager.execute(command)
                 val output = if (result.isError) "❌ $command\n${result.output}" else "✅ $command\n${result.output}"
                 chatMessages = chatMessages + ChatMessage("assistant", "```\n$ $command\n${result.output}\n```")
                 snackbarHostState.showSnackbar(
